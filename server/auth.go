@@ -160,8 +160,15 @@ func samePath(a, b string) bool {
 
 // signJWT issues a 7-day HS256 token for user ARTEX.
 func signJWT(key []byte) (string, error) {
+	return signJWTSubject(key, "ARTEX")
+}
+
+// signJWTSubject issues a 7-day HS256 token for an arbitrary subject. The MCP
+// bridge uses it to attribute internally-dispatched actions to "mcp-operator"
+// in decision audit trails.
+func signJWTSubject(key []byte, subject string) (string, error) {
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
-		Subject:   "ARTEX",
+		Subject:   subject,
 		ExpiresAt: jwt.NewNumericDate(time.Now().Add(jwtTTL)),
 		IssuedAt:  jwt.NewNumericDate(time.Now()),
 	}).SignedString(key)

@@ -57,10 +57,13 @@ const MAX_TOKENS_FIELD_HINTS: Record<string, string> = {
   anthropic: "Only selectable for the openai format. Anthropic's field name is fixed as max_tokens.",
   "openai-responses": "Only selectable for the openai format. The Responses API's field name is fixed as max_output_tokens.",
   ollama: "Only selectable for the openai format. Ollama's field name is fixed as max_tokens.",
+  opencode: "Not selectable: the OpenCode bridge sends no API requests, so no output-cap field ever goes on a wire.",
 };
 // LLM profile formats. The default in the create form is "anthropic"; "ollama" is the
-// keyless local-server format (base URL defaults to http://127.0.0.1:11434/v1).
-type ProfileFormat = "anthropic" | "openai" | "openai-responses" | "ollama";
+// keyless local-server format (base URL defaults to http://127.0.0.1:11434/v1);
+// "opencode" is the operator bridge — completions are answered by an OpenCode
+// session over MCP, keyless and endpoint-less.
+type ProfileFormat = "anthropic" | "openai" | "openai-responses" | "ollama" | "opencode";
 const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1";
 const EFFORT_LEVELS: { value: string; label: string }[] = [
   { value: NONE, label: "Not sent (default)" },
@@ -78,11 +81,11 @@ function cooldownText(secs: number) {
 }
 
 // The "healthy or not" badge a profile shows on its card. A profile without a Key cannot send any request at all — say that before the breaker;
-// the exception is Ollama, a keyless local server that IS callable without a key. The other states come from the pool's breaker
+// the exceptions are the keyless formats: Ollama (a keyless local server) and the OpenCode bridge (answered by an operator session, not an API). The other states come from the pool's breaker
 // records (with polling off no new records appear, so "healthy" = no known failure).
 type Health = { label: string; cls: string; hint?: string };
 function healthOf(p: LLMProfile, m?: LLMPoolMember): Health {
-  if (!p.api_key_hint && p.format !== "ollama") {
+  if (!p.api_key_hint && p.format !== "ollama" && p.format !== "opencode") {
     return {
       label: "No Key configured",
       cls: "border-muted-foreground/40 text-muted-foreground",
@@ -350,7 +353,7 @@ function ProfileSheet({
     if (!open) return;
     setName(profile?.name ?? "");
     setFormat(
-      profile?.format === "openai" || profile?.format === "openai-responses" || profile?.format === "ollama"
+      profile?.format === "openai" || profile?.format === "openai-responses" || profile?.format === "ollama" || profile?.format === "opencode"
         ? profile.format
         : "anthropic",
     );
@@ -476,6 +479,8 @@ function ProfileSheet({
   let keyPlaceholder = "sk-…";
   if (format === "ollama") {
     keyPlaceholder = "optional — a local Ollama server runs keyless";
+  } else if (format === "opencode") {
+    keyPlaceholder = "not used — an OpenCode operator session answers this profile";
   } else if (keyHint) {
     keyPlaceholder = `Set (${keyHint}); leave empty to keep it`;
   }
@@ -524,6 +529,7 @@ function ProfileSheet({
                   <SelectItem value="openai">OpenAI (Chat Completions)</SelectItem>
                   <SelectItem value="openai-responses">OpenAI (Responses API)</SelectItem>
                   <SelectItem value="ollama">Ollama (local, no key needed)</SelectItem>
+                  <SelectItem value="opencode">OpenCode (MCP operator, no key, no endpoint)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -535,7 +541,7 @@ function ProfileSheet({
               <Input
                 id="p-model"
                 className="font-mono"
-                placeholder={format === "ollama" ? "llama3.2" : "claude-opus-4-8"}
+                placeholder={format === "ollama" ? "llama3.2" : format === "opencode" ? "opencode-agent (display only)" : "claude-opus-4-8"}
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
               />
@@ -577,13 +583,14 @@ function ProfileSheet({
           </div>
 
           <div className="grid gap-2">
-            <Label htmlFor="p-base-url">Base URL (optional)</Label>
+            <Label htmlFor="p-base-url">Base URL {format === "opencode" ? "(not used)" : "(optional)"}</Label>
             <Input
               id="p-base-url"
               className="font-mono"
-              placeholder={format === "ollama" ? OLLAMA_DEFAULT_BASE_URL : "https://api.openai.com/v1"}
+              placeholder={format === "ollama" ? OLLAMA_DEFAULT_BASE_URL : format === "opencode" ? "no endpoint — the bridge makes no outbound calls" : "https://api.openai.com/v1"}
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
+              disabled={format === "opencode"}
             />
           </div>
 
@@ -635,7 +642,7 @@ function ProfileSheet({
 
           <div className="grid gap-2">
             <Label htmlFor="p-api-key">
-              {format === "ollama" ? "API Key (optional for Ollama)" : "API Key"}
+              {format === "ollama" ? "API Key (optional for Ollama)" : format === "opencode" ? "API Key (not used for OpenCode)" : "API Key"}
             </Label>
             <Input
               id="p-api-key"

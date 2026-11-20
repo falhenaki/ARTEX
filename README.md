@@ -69,6 +69,15 @@ set the concurrent worker count to at least **2** before starting a task (the co
 applies to subsequently started tasks). In **System → Agents → Worker**, leave the
 model set to follow the task; a fixed Worker model takes precedence over rotation.
 
+### Running entirely through OpenCode (no API key)
+
+Add an LLM profile with format **OpenCode** and activate it: ARTEX stops calling
+any LLM API. Every completion is parked in a bridge queue and answered by an
+OpenCode session over MCP (`artex mcp-bridge`), so the token spend happens
+inside your OpenCode subscription. The same MCP server exposes tasks,
+approvals, worker replies and findings — ARTEX becomes fully operable from the
+agent. Setup and tool reference: [OPENCODE-BRIDGE.md](OPENCODE-BRIDGE.md).
+
 When creating a task, select both profiles in **LLM config chain**, arrange their
 order, and enable **Enable multi-LLM worker rotation**. For an existing task, open
 its LLM config control, change the switch or profile order, and save.

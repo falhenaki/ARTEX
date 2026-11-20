@@ -269,6 +269,10 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	} else {
 		log.Printf("[engine] no LLM provider configured — engine idle until set via /api/llm or env")
 	}
+	// Materialize the MCP bridge token now so its startup line (with the
+	// generated value, when ARTEX_MCP_TOKEN is unset) lands in the captured
+	// boot log where an operator can copy it from.
+	mcpBridgeToken()
 	// Both env readers have now run (NewManager for the DSN, FromEnv above for the
 	// keys). Drop the secrets before anything below can spawn a child process:
 	// restoring runtimes resumes workers that run shells, and MCP discovery starts
@@ -981,8 +985,12 @@ func (s *Server) Handler() http.Handler {
 	// /api/* goes through CORS + JWT; everything else is served by the embedded
 	// frontend (public — auth is enforced client-side and on the API). With the
 	// no-embed build the webui handler just 404s (run `next dev` separately).
+	// The MCP bridge endpoints register on the ROOT mux with their own token
+	// auth: exact patterns win over the /api/ prefix, so they stay outside the
+	// JWT wrapper while every other /api route keeps it.
 	api := cors(s.requireAuth(mux))
 	root := http.NewServeMux()
+	s.registerMCPRoutes(root)
 	root.Handle("/api/", api)
 	root.Handle("/", s.webuiHandler())
 	return root
