@@ -224,3 +224,10 @@ func TestDeriveStopReason(t *testing.T) {
 		t.Fatalf("explicit = %q", s)
 	}
 }
+
+func TestProviderBridgeBacked(t *testing.T) {
+	p := NewProvider("m")
+	if !p.BridgeBacked() {
+		t.Fatal("bridge provider must report BridgeBacked=true")
+	}
+}

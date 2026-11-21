@@ -562,6 +562,21 @@ func (s *Server) effectiveProfileForAgent(agentKey string, pinID *int64) *int64 
 	return pinID
 }
 
+// convBridgeBacked reports whether a conversation's completions are served
+// over the opencode bridge: the agent's bound profile or the conversation's
+// pinned profile when set, otherwise the global active config.
+func (s *Server) convBridgeBacked(c *db.Conversation) bool {
+	if id := s.effectiveProfileForAgent(c.AgentKey, c.LLMProfileID); id != nil && s.m.pg != nil {
+		if p, err := s.m.pg.ProfileByID(*id); err == nil && p != nil {
+			return p.Format == string(agent.FormatOpencode)
+		}
+	}
+	s.cfgMu.Lock()
+	f := s.llmCfg.Format
+	s.cfgMu.Unlock()
+	return f == agent.FormatOpencode
+}
+
 // resolveChatAgent picks the ChatAgent for one conversation: the agent's own
 // binding or this conversation's chosen profile first, the global active config
 // only as a fallback. Both the send precheck and the background runner MUST use

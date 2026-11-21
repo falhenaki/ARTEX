@@ -106,8 +106,13 @@ each waits independently (`ARTEX_OPENCODE_QUEUE_TIMEOUT` unclaimed, default
 - **Failover.** The opencode profile can sit in an LLM chain like any other;
   an unanswered request times out (no HTTP status in the error) and is treated
   as transport-level, i.e. failover-eligible.
-- **Run budgets.** Worker wall-clock run budgets (default 1200 s/agent) now
-  include operator wait time. When the operator is slow, raise the agent run
-  seconds (System → Agents) or the task timeout.
+- **Run budgets.** Worker and conversation wall-clock budgets count operator
+  wait time (the harness enforces an absolute deadline it cannot pause), so
+  when the resolved chain is opencode-backed ARTEX automatically inflates the
+  per-run budget **4×** (logged at task build: `wall-clock budget 1200s →
+  4800s`). Turn and token budgets are untouched — they measure work, which the
+  bridge does not change. A task's own **timeout_seconds stays yours**: set it
+  generously (or 0) for bridge-run tasks, because it is absolute wall clock
+  from the first run and is not scaled.
 - **Payload cap.** A `artex_llm_next` response is capped at ~2 MB: beyond it,
   the oldest tool_result payloads are replaced with a truncation marker.

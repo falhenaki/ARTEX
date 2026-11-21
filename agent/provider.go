@@ -153,6 +153,26 @@ const FormatOpencode llm.Format = "opencode"
 // whichever OpenCode agent answers the queue.
 const DefaultOpencodeModel = "opencode-agent"
 
+// BridgeRunBudgetFactor is how much a wall-clock run budget is inflated when
+// the run's completions are answered over the opencode bridge. The harness
+// enforces MaxDuration as an absolute deadline that cannot distinguish agent
+// work from operator wait, so a bridge-served run of the same number of turns
+// simply takes longer in wall-clock terms; without the factor a worker would
+// hit its run budget mid-wait and be force-wrapped with a fraction of the
+// exploration. 4× covers the typical 1.5–3× per-turn inflation (park wait +
+// operator inference) with headroom. Turn and token budgets are NOT scaled:
+// they measure work, which the bridge does not change.
+const BridgeRunBudgetFactor = 4
+
+// BridgeAdjustedRunSeconds scales a per-run wall-clock budget for a
+// bridge-backed run. 0 (unlimited) stays unlimited.
+func BridgeAdjustedRunSeconds(secs int) int {
+	if secs <= 0 {
+		return secs
+	}
+	return secs * BridgeRunBudgetFactor
+}
+
 // DefaultOllamaBaseURL is the base of Ollama's OpenAI-compatible endpoint the
 // provider appends /chat/completions to. Must never end up empty: with an
 // empty BaseURL, the SDK would fall back to OpenAI's public endpoint.

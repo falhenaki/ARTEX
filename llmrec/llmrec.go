@@ -95,6 +95,15 @@ func Wrap(inner llm.Provider, pg *db.DB, model, profName, thinkingType, reasonin
 	}
 }
 
+// BridgeBacked forwards the opencode-bridge probe to the wrapped provider, so
+// budget scaling sees through the recording layer.
+func (r *Recorder) BridgeBacked() bool {
+	if b, ok := r.inner.(interface{ BridgeBacked() bool }); ok {
+		return b.BridgeBacked()
+	}
+	return false
+}
+
 // parseSession extracts task id and worker role from session strings like
 // "exp1-worker-i3" → ("1", "worker") or "exp2-planner" → ("2", "planner").
 func parseSession(s string) (taskID, worker string) {

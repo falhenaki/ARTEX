@@ -28,6 +28,11 @@ func NewProvider(model string) *Provider {
 // Model returns the configured display model name.
 func (p *Provider) Model() string { return p.model }
 
+// BridgeBacked reports that completions wait for an MCP operator. Wall-clock
+// budgets (harness MaxDuration) count this waiting, so callers that scale run
+// budgets probe this through the provider wrappers.
+func (p *Provider) BridgeBacked() bool { return true }
+
 // Complete parks the request and returns the operator's answer as one
 // assembled assistant message.
 func (p *Provider) Complete(ctx context.Context, req llm.CompletionRequest) (llm.Message, string, llm.Usage, error) {
