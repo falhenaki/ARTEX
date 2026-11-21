@@ -147,6 +147,15 @@ type boundProvider struct {
 // Bind belongs immediately around a concrete provider, inside any routing pool.
 func Bind(inner llm.Provider, model Model) llm.Provider { return &boundProvider{inner, model} }
 
+// BridgeBacked forwards the opencode-bridge probe to the wrapped provider so
+// budget scaling sees through this binder layer.
+func (p *boundProvider) BridgeBacked() bool {
+	if b, ok := p.inner.(interface{ BridgeBacked() bool }); ok {
+		return b.BridgeBacked()
+	}
+	return false
+}
+
 func (p *boundProvider) Stream(ctx context.Context, req llm.CompletionRequest) iter.Seq2[llm.StreamEvent, error] {
 	return func(yield func(llm.StreamEvent, error) bool) {
 		c, _ := ctx.Value(attemptKey{}).(*Capture)

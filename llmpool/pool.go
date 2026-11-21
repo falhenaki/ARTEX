@@ -71,6 +71,19 @@ func (p *Pool) Members() []*Member { return p.members }
 // Head returns the first member of the chain.
 func (p *Pool) Head() *Member { return p.members[0] }
 
+// BridgeBacked reports whether any member is answered by the opencode MCP
+// bridge (its completions wait for an operator, which inflates wall-clock run
+// budgets). Probes the members' providers structurally so wrapper layers
+// (recorder, side-question binder) can forward the same question.
+func (p *Pool) BridgeBacked() bool {
+	for _, m := range p.members {
+		if b, ok := m.Prov.(interface{ BridgeBacked() bool }); ok && b.BridgeBacked() {
+			return true
+		}
+	}
+	return false
+}
+
 // Stream implements llm.Provider with failover.
 //
 // The one hard rule: a member may only be abandoned BEFORE it has yielded any

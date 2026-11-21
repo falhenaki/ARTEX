@@ -255,6 +255,23 @@ func (r *taskLLMRuntime) currentFor(ctx context.Context) (taskLLMSelection, erro
 	return sel, nil
 }
 
+// BridgeBacked reports whether this role's currently resolved provider is
+// served over the opencode bridge (completions wait for an MCP operator, which
+// inflates wall-clock run budgets). Probes the resolved provider chain
+// structurally — the pool, recorder and side-question wrappers all forward the
+// question. Best-effort: an unresolvable chain (LLM not ready) reports false,
+// matching the other resolver-miss fallbacks.
+func (r *taskLLMRuntime) BridgeBacked() bool {
+	sel, err := r.currentFor(context.Background())
+	if err != nil || sel.provider == nil {
+		return false
+	}
+	if b, ok := sel.provider.(interface{ BridgeBacked() bool }); ok {
+		return b.BridgeBacked()
+	}
+	return false
+}
+
 // activeCfg resolves the task's currently-active LLM config, mirroring current()'s
 // source precedence (agent binding → active chain profile → global). Read-only and
 // best-effort: ok=false when nothing resolves, leaving the per-setting fallback to
@@ -805,7 +822,19 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	wk.SetNonStreaming(workerRuntime.nonStreaming) // per the task's currently active profile streaming switch (read every turn)
 	wk.SetMaxTokens(workerRuntime.maxTokens)       // as above, the output cap also follows the currently active profile
 	wk.SetNoaEnabled(s.m.NoaCompactionEnabled)     // experimental: noa context compaction (platform-level switch, read every run)
-	wk.SetRunTimeout(time.Duration(s.agentRunSeconds("worker")) * time.Second)
+	// Wall-clock run budget: when the resolved chain is answered over the
+	// opencode bridge, operator wait counts inside the harness's absolute
+	// MaxDuration, so the budget is inflated (see BridgeRunBudgetFactor) or the
+	// worker would be force-wrapped while merely waiting for its operator.
+	// Best-effort: an unresolvable chain (LLM not ready yet) keeps the plain
+	// budget, matching every other resolver miss here.
+	runSecs := s.agentRunSeconds("worker")
+	if workerRuntime.BridgeBacked() {
+		adj := agent.BridgeAdjustedRunSeconds(runSecs)
+		log.Printf("[engine] task %s: worker runs on the opencode bridge; wall-clock budget %ds → %ds (operator wait counts inside the run)", t.ID, runSecs, adj)
+		runSecs = adj
+	}
+	wk.SetRunTimeout(time.Duration(runSecs) * time.Second)
 	wk.SetProxy(s.m.ProxyAddr(), s.m.ProxyCACert())
 	wk.SetWebSearch(s.webSearchFor("worker"))
 	wk.SetConstraintInject(s.constraintInjectWorker) // operation-constraint injection into the worker (configurable, on by default)

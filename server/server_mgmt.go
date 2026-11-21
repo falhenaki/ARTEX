@@ -2569,6 +2569,12 @@ func (s *Server) pgListModels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	provider := strings.TrimSpace(req.Provider)
+	// The opencode bridge has no endpoint to query: the "model" is whichever
+	// OpenCode session answers the queue, so offer the fixed display name.
+	if provider == "opencode" {
+		writeJSON(w, 200, map[string]any{"ok": true, "models": []string{agent.DefaultOpencodeModel}})
+		return
+	}
 	// Ollama serves its model list keyless on the local server: no key gate.
 	if apiKey == "" && provider != "ollama" {
 		msg := "no API Key provided"

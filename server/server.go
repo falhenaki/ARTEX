@@ -309,6 +309,10 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	// Startup env readers have now run (NewManager for the DSN, the LLM provider
 	// and archive store for their credentials). Drop the secrets before anything
 	// below can spawn a child process:
+	// Materialize the MCP bridge token now so its startup line (with the
+	// generated value, when ARTEX_MCP_TOKEN is unset) lands in the captured
+	// boot log where an operator can copy it from.
+	mcpBridgeToken()
 	// restoring runtimes resumes workers that run shells, and MCP discovery starts
 	// stdio servers.
 	if s.scrubSecrets {
@@ -628,6 +632,21 @@ func (s *Server) effectiveProfileForAgent(agentKey string, pinID *int64) *int64 
 		}
 	}
 	return pinID
+}
+
+// convBridgeBacked reports whether a conversation's completions are served
+// over the opencode bridge: the agent's bound profile or the conversation's
+// pinned profile when set, otherwise the global active config.
+func (s *Server) convBridgeBacked(c *db.Conversation) bool {
+	if id := s.effectiveProfileForAgent(c.AgentKey, c.LLMProfileID); id != nil && s.m.pg != nil {
+		if p, err := s.m.pg.ProfileByID(*id); err == nil && p != nil {
+			return p.Format == string(agent.FormatOpencode)
+		}
+	}
+	s.cfgMu.Lock()
+	f := s.llmCfg.Format
+	s.cfgMu.Unlock()
+	return f == agent.FormatOpencode
 }
 
 // resolveChatAgent picks the ChatAgent for one conversation: the agent's own
@@ -1076,8 +1095,12 @@ func (s *Server) Handler() http.Handler {
 	// /api/* goes through CORS + JWT; everything else is served by the embedded
 	// frontend (public — auth is enforced client-side and on the API). With the
 	// no-embed build the webui handler just 404s (run `next dev` separately).
+	// The MCP bridge endpoints register on the ROOT mux with their own token
+	// auth: exact patterns win over the /api/ prefix, so they stay outside the
+	// JWT wrapper while every other /api route keeps it.
 	api := cors(s.requireAuth(mux))
 	root := http.NewServeMux()
+	s.registerMCPRoutes(root)
 	root.Handle("/api/", api)
 	webui := s.webuiHandler()
 	root.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

@@ -574,7 +574,15 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 	}
 	pg := s.m.pg
 	maxTurns := s.agentMaxTurns(c.AgentKey)
-	maxDuration := time.Duration(s.agentRunSeconds(c.AgentKey)) * time.Second
+	runSecs := s.agentRunSeconds(c.AgentKey)
+	// Operator-answered completions wait inside the run's absolute wall-clock
+	// budget; scale it so a bridge-served conversation isn't cut off mid-wait.
+	if s.convBridgeBacked(c) {
+		adj := agent.BridgeAdjustedRunSeconds(runSecs)
+		log.Printf("[conv %d] opencode bridge profile; wall-clock budget %ds → %ds", c.ID, runSecs, adj)
+		runSecs = adj
+	}
+	maxDuration := time.Duration(runSecs) * time.Second
 	webSearch := false
 	if a, err := pg.GetAgentByKey(c.AgentKey); err == nil && a != nil {
 		webSearch = a.WebSearch

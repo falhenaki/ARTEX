@@ -194,6 +194,20 @@ func signJWTVersion(key []byte, version int64) (string, error) {
 	}).SignedString(key)
 }
 
+// signJWTSubject issues a 7-day HS256 token for an arbitrary subject, unbound
+// from a password version (consumed in-process only). The MCP bridge uses it
+// to attribute internally-dispatched actions to "mcp-operator" in decision
+// audit trails.
+func signJWTSubject(key []byte, subject string) (string, error) {
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, sessionClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   subject,
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(jwtTTL)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+	}).SignedString(key)
+}
+
 // verifyJWT returns true when tokenStr is a valid, non-expired HS256 token.
 // version 0 means no password change is stored yet, and any valid token is
 // accepted. A later version requires the token's pwd claim to equal it.

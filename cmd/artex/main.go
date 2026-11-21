@@ -14,12 +14,14 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/config"
 	"github.com/Autumn-27/artex/egress"
+	"github.com/Autumn-27/artex/mcpbridge"
 	"github.com/Autumn-27/artex/server"
 )
 
@@ -97,6 +99,13 @@ func flagWasSet(name string) bool {
 }
 
 func run() int {
+	// Subcommand dispatch: `artex mcp-bridge [--url URL] [--token TOKEN]`
+	// runs the MCP stdio server for OpenCode-style operator sessions instead
+	// of the backend. Everything else (no argument) is the historical backend
+	// path, flags and all.
+	if len(os.Args) > 1 && os.Args[1] == "mcp-bridge" {
+		return runMCPBridge(os.Args[2:])
+	}
 	var (
 		addr    = flag.String("addr", "127.0.0.1:8787", "HTTP listen address")
 		dataDir = flag.String("data", filepath.Join(config.BaseDir(), "data"), "runtime data directory: traffic index, task files, transcripts (default: data/ next to the executable)")
@@ -259,4 +268,31 @@ func shutdownContext(signalCtx context.Context) (context.Context, context.Cancel
 		}
 	}()
 	return ctx, shutdown
+}
+
+// runMCPBridge executes `artex mcp-bridge`: an MCP stdio server proxying the
+// running ARTEX backend's /api/mcp/* endpoints. URL and token come from
+// --url/--token flags or ARTEX_URL/ARTEX_MCP_TOKEN environment variables
+// (flags win). Exit code 2 on configuration errors so a misconfigured entry
+// in the operator's MCP config is visible in its logs.
+func runMCPBridge(args []string) int {
+	fs := flag.NewFlagSet("mcp-bridge", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	url := fs.String("url", os.Getenv("ARTEX_URL"), "ARTEX backend base URL (env ARTEX_URL, default http://127.0.0.1:8787)")
+	token := fs.String("token", os.Getenv("ARTEX_MCP_TOKEN"), "MCP bridge token (env ARTEX_MCP_TOKEN)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if strings.TrimSpace(*url) == "" {
+		*url = "http://127.0.0.1:8787"
+	}
+	if strings.TrimSpace(*token) == "" {
+		fmt.Fprintln(os.Stderr, "mcp-bridge: no token: pass --token or set ARTEX_MCP_TOKEN (the value the ARTEX backend logs as \"MCP bridge token\", or ARTEX_MCP_TOKEN on the backend)")
+		return 2
+	}
+	if err := mcpbridge.Run(*url, *token, version); err != nil {
+		fmt.Fprintf(os.Stderr, "mcp-bridge: %v\n", err)
+		return 1
+	}
+	return 0
 }

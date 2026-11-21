@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/llmrec"
+	"github.com/Autumn-27/artex/opencode"
 	"github.com/Autumn-27/norma/agentcore"
 	"github.com/Autumn-27/norma/compaction"
 	"github.com/Autumn-27/norma/llm"
@@ -142,6 +143,38 @@ const (
 // OpenAI's public endpoint).
 const FormatOllama llm.Format = "ollama"
 
+// FormatOpencode marks an OpenCode-operator profile: completions are NOT sent
+// to any HTTP endpoint. They are parked in the opencode bridge queue and
+// answered by an OpenCode session over MCP (artex_llm_next / artex_llm_submit),
+// so the token spend happens inside the OpenCode subscription instead of an
+// ARTEX-held API key. Keyless by construction; no network I/O happens here.
+const FormatOpencode llm.Format = "opencode"
+
+// DefaultOpencodeModel is the display model name for opencode profiles that
+// don't set one. Purely cosmetic (logs, UI, recordings): the real "model" is
+// whichever OpenCode agent answers the queue.
+const DefaultOpencodeModel = "opencode-agent"
+
+// BridgeRunBudgetFactor is how much a wall-clock run budget is inflated when
+// the run's completions are answered over the opencode bridge. The harness
+// enforces MaxDuration as an absolute deadline that cannot distinguish agent
+// work from operator wait, so a bridge-served run of the same number of turns
+// simply takes longer in wall-clock terms; without the factor a worker would
+// hit its run budget mid-wait and be force-wrapped with a fraction of the
+// exploration. 4× covers the typical 1.5–3× per-turn inflation (park wait +
+// operator inference) with headroom. Turn and token budgets are NOT scaled:
+// they measure work, which the bridge does not change.
+const BridgeRunBudgetFactor = 4
+
+// BridgeAdjustedRunSeconds scales a per-run wall-clock budget for a
+// bridge-backed run. 0 (unlimited) stays unlimited.
+func BridgeAdjustedRunSeconds(secs int) int {
+	if secs <= 0 {
+		return secs
+	}
+	return secs * BridgeRunBudgetFactor
+}
+
 // DefaultOllamaBaseURL is the base of Ollama's OpenAI-compatible endpoint the
 // provider appends /chat/completions to. Must never end up empty: with an
 // empty BaseURL, the SDK would fall back to OpenAI's public endpoint.
@@ -171,8 +204,12 @@ func normalizeOllamaBaseURL(raw string) string {
 }
 
 // NeedsAPIKey reports whether this provider format requires an API key to be
-// usable. Ollama (local server) is keyless; every cloud format needs one.
-func (c Config) NeedsAPIKey() bool { return c.Format != FormatOllama }
+// usable. Ollama (local server) is keyless; the opencode bridge is answered by
+// a subscribed operator session, not an API, so it is keyless too. Every other
+// cloud format needs one.
+func (c Config) NeedsAPIKey() bool {
+	return c.Format != FormatOllama && c.Format != FormatOpencode
+}
 
 // CompactionWindow returns the model context window in TOKENS for compaction
 // thresholds, resolved from the user-configured size (ContextWindowK). 0/unset →
@@ -219,11 +256,11 @@ func compactionConfig(windowTokens int) *compaction.Config {
 
 // FromEnv resolves the LLM provider config:
 //
-//	ARTEX_LLM_PROVIDER = anthropic|openai|openai-responses|ollama (default: inferred from keys)
+//	ARTEX_LLM_PROVIDER = anthropic|openai|openai-responses|ollama|opencode (default: inferred from keys)
 //	ARTEX_LLM_MODEL    = model id        (default: per provider)
-//	ARTEX_LLM_BASE_URL = endpoint        (optional; ollama defaults to localhost:11434/v1)
-//	ARTEX_LLM_PROXY    = proxy URL        (optional; http/https/socks5)
-//	ANTHROPIC_API_KEY / OPENAI_API_KEY         = credentials (unused for ollama)
+//	ARTEX_LLM_BASE_URL = endpoint        (optional; ollama defaults to localhost:11434/v1; unused for opencode)
+//	ARTEX_LLM_PROXY    = proxy URL        (optional; http/https/socks5; unused for opencode)
+//	ANTHROPIC_API_KEY / OPENAI_API_KEY   = credentials (unused for ollama/opencode)
 func FromEnv() (Config, bool) {
 	// Case- and space-insensitive: "Ollama" used to miss every case below and
 	// fall through to anthropic, sending ANTHROPIC_API_KEY to the Ollama base URL.
@@ -272,6 +309,15 @@ func FromEnv() (Config, bool) {
 		c.BaseURL = normalizeOllamaBaseURL(c.BaseURL)
 		if c.Model == "" {
 			c.Model = "llama3.2"
+		}
+	case "opencode":
+		// The bridge has no endpoint: any BaseURL/APIKey is ignored (the bridge
+		// performs no network I/O; Stream and Complete both work — Stream just
+		// replays the operator's answer as synthesized events).
+		c.Format = FormatOpencode
+		c.BaseURL, c.APIKey, c.Proxy = "", "", ""
+		if c.Model == "" {
+			c.Model = DefaultOpencodeModel
 		}
 	default:
 		c.Format = llm.FormatAnthropic
@@ -324,6 +370,14 @@ func ConfigFrom(provider, model, baseURL, apiKey, proxy string) Config {
 		if c.Model == "" {
 			c.Model = "llama3.2"
 		}
+	case "opencode":
+		// Operator-answered profile: no endpoint, no key, no proxy. Leaving the
+		// fields empty is the point — the bridge performs no network I/O.
+		c.Format = FormatOpencode
+		c.BaseURL, c.APIKey, c.Proxy = "", "", ""
+		if c.Model == "" {
+			c.Model = DefaultOpencodeModel
+		}
 	default:
 		c.Format = llm.FormatAnthropic
 		// provider appends "/v1/messages".
@@ -346,7 +400,7 @@ func isFalsy(s string) bool {
 }
 
 // Provider returns the short provider name
-// ("anthropic"/"openai"/"openai-responses"/"ollama").
+// ("anthropic"/"openai"/"openai-responses"/"ollama"/"opencode").
 func (c Config) Provider() string {
 	switch c.Format {
 	case llm.FormatOpenAI:
@@ -355,6 +409,8 @@ func (c Config) Provider() string {
 		return "openai-responses"
 	case FormatOllama:
 		return "ollama"
+	case FormatOpencode:
+		return "opencode"
 	}
 	return "anthropic"
 }
@@ -363,6 +419,13 @@ func (c Config) Provider() string {
 // limiter lives on the single provider instance — so planner + all workers +
 // main agent (which share this provider) are bounded by one shared rate limit.
 func (c Config) NewProvider() (llm.Provider, error) {
+	// The opencode bridge performs no HTTP at all: park-and-answer via the
+	// process-wide queue. It must not build an HTTP client (a configured proxy
+	// would fail validation here for no reason) and must never fall through to
+	// llm.NewProvider, whose factory rejects unknown formats.
+	if c.Format == FormatOpencode {
+		return opencode.NewProvider(c.Model), nil
+	}
 	client, err := quotaAwareHTTPClient(c.Proxy, c.SessionHeaderKey, c.UserAgent)
 	if err != nil {
 		return nil, err
