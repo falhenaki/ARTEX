@@ -58,7 +58,23 @@ planner / worker / chat ──▶ opencode bridge queue ──▶ artex_llm_next
 
 ## Running
 
-In the OpenCode session, the driving loop is:
+**The operating pattern: a disposable session does the serving.** The
+`artex` MCP server is registered globally, so EVERY opencode session gets the
+tools — the bridge is never bound to the session that set it up. Context-wise,
+whoever answers the queue pays for it (each `artex_llm_next` payload lands in
+that session's context), so never serve a long task from your main session:
+
+- **Fresh session per task** — open a new opencode session, say *"serve
+  ARTEX"*; it loops on `artex_llm_next`/`artex_llm_submit` until the task is
+  terminal, then you throw the session away. Its context cost stays contained.
+- **Subagent operator** — a supervising session can spawn a subagent whose
+  entire job is the serve loop; the supervisor stays clean and just watches
+  `artex_status` / `artex_findings`.
+- Multiple intents in flight can be served by several such sessions or
+  subagents concurrently — the queue hands each claimed request out exactly
+  once.
+
+In the serving session, the loop is:
 
 1. `artex_status` — see the queue + active profile.
 2. `artex_task_create` — start a task (or use the web UI).
